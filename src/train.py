@@ -519,7 +519,7 @@ def main(gpu, args):
     # Training cells/tasks
     cell_dict = {
         'tt': ['K562', 'pc3', 'Jurkat', 'HeLa', 'H1', 'MCF10A'],
-        'bru': ['GM12878', 'K562', 'HepG2', 'MCF-7', 'IMR-90', 'pc3', 'Calu3', 'Caco2','panc1','A673'],
+        'bru': ['GM12878', 'K562', 'HepG2', 'MCF-7', 'IMR-90', 'pc3', 'Calu3', 'Caco2'],
     }
 
     # Held-out cells for monitoring only.
