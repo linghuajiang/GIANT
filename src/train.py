@@ -151,9 +151,8 @@ def norm_smooth(x_f, x_r, alpha=98):
     x_r = np.arcsinh(x_r / scale)
 
     return torch.cat(
-        (
-            torch.tensor(x_f, dtype=torch.float32).unsqueeze(-1),
-            torch.tensor(x_r, dtype=torch.float32).unsqueeze(-1),
+        (torch.tensor(x_f, dtype=torch.float32).unsqueeze(-1),
+        torch.tensor(x_r, dtype=torch.float32).unsqueeze(-1),
         ),
         dim=-1,
     )
@@ -232,8 +231,7 @@ def pad_signal_matrix(matrix, pad_len=300):
     return np.hstack((dmatrix, matrix, umatrix))
 
 
-def load_dnase(dnase_seq, normalize=False):
-    # normalize is kept for API compatibility; previous code did not use it.
+def load_dnase(dnase_seq):
     dnase_seq = pad_signal_matrix(dnase_seq.astype('float32').toarray().reshape(-1, 1000))
     return sparse.csr_matrix(dnase_seq)
 
@@ -270,14 +268,7 @@ def convert_atac_to_float32(atac_data):
     return atac_data
 
 
-def apply_atac_depth_dropout(
-    x,
-    p_scale=0.2,
-    p_mask=0.1,
-    scale_range=(0.5, 0.9),
-    mask_frac=0.02,
-    region_size=5000,
-):
+def apply_atac_depth_dropout(x, p_scale=0.2, p_mask=0.1, scale_range=(0.5, 0.9), mask_frac=0.02, region_size=5000):
     """
     x: (B, 5, L), ATAC is channel 4.
     """
@@ -291,9 +282,7 @@ def apply_atac_depth_dropout(
         num_mask = max(1, int(L * mask_frac / region_size))
 
         for _ in range(num_mask):
-            start = torch.randint(
-                0, max(1, L - region_size), (1,), device=x.device
-            ).item()
+            start = torch.randint(0, max(1, L - region_size), (1,), device=x.device).item()
             end = start + region_size
             x[:, 4:5, start:end] = 0
 
@@ -332,8 +321,6 @@ def per_sample_channel_balanced_smooth_l1(pred, target, scale_floor=0.15):
 def channel_balanced_abs_loss_sum(pred, target, sample_weights=None):
     """
     Weighted sum of per-sample, channel-balanced SmoothL1 losses.
-    This mirrors the original code that summed losses across cells/tasks
-    and normalized by a global denominator.
     """
     per_sample = per_sample_channel_balanced_smooth_l1(pred, target)
 
@@ -346,12 +333,7 @@ def channel_balanced_abs_loss_sum(pred, target, sample_weights=None):
 
 def channel_balanced_delta_loss_mean(pred, target, sample_weights=None):
     """
-    Same-locus pairwise delta loss:
-        pred_i - pred_j should match target_i - target_j.
-
-    pred, target: (B, L, C), where B is number of cells for the same locus.
-    Returns:
-        weighted mean over unordered cell pairs.
+    Same-locus pairwise delta loss
     """
     B = pred.shape[0]
     if B < 2:
@@ -486,29 +468,20 @@ def main(gpu, args):
     rank = gpu
     world_size = int(os.environ['WORLD_SIZE'])
 
-    # Training cells/tasks
+    # Training cells
     cell_dict = {
         'tt': ['K562', 'pc3', 'Jurkat', 'HeLa', 'H1', 'MCF10A'],
         'bru': ['GM12878', 'K562', 'HepG2', 'MCF-7', 'IMR-90', 'pc3', 'Calu3', 'Caco2'],
     }
 
-    # Held-out cells for monitoring only.
-    heldout_cell_dict_requested = {
-        'tt': ['HCT116'],
-        'bru': ['HCT116', 'MCF10A'],
-    }
+    # Held-out cells for monitoring only
+    heldout_cell_dict_requested = {'tt': ['HCT116'], 'bru': ['HCT116', 'MCF10A']}
 
     task_to_head = {'tt': 0, 'bru': 1}
 
-    # Load checkpoint.
+    # Load checkpoint
     ckpt = torch.load(args.init_ckpt, map_location='cpu')
-    filtered = {
-        k: v for k, v in ckpt.items()
-        if not (
-            k.startswith("head_tt.")
-            or k.startswith("head_bru.")
-        )
-    }
+    filtered = {k: v for k, v in ckpt.items() if not (k.startswith("head_tt.") or k.startswith("head_bru."))}
 
     model = build_model(args)
     missing, unexpected = model.load_state_dict(filtered, strict=False)
@@ -556,7 +529,7 @@ def main(gpu, args):
               flush=True)
         print('load data start', flush=True)
 
-    # Load ATAC data.
+    # Load ATAC data
     with open('train_atac_merge_fp16.pickle', 'rb') as f:
         atac_data = pickle.load(f)
     with open('train_HeLa_dnase.pickle', 'rb') as f:
@@ -582,13 +555,13 @@ def main(gpu, args):
     if rank == 0:
         print("ATAC cells available:", sorted(list(atac_data.keys())), flush=True)
 
-    # Load reference genome.
+    # Load reference genome
     ref_data = {}
     chroms = [i for i in range(1, 23)]
     for chr in chroms:
         ref_data[chr] = load_ref_genome(chr)
 
-    # Load RNA labels.
+    # Load RNA labels
     rna_data = {'tt': {}, 'bru': {}}
 
     for task in ['tt', 'bru']:
@@ -626,7 +599,7 @@ def main(gpu, args):
         print("input_locs size:", np.shape(input_locs), flush=True)
         print("heldout_cell_dict actually used:", heldout_cell_dict, flush=True)
 
-    def load_data(lidx, cl, task, atac_merge=False):
+    def load_data(lidx, cl, task):
         chrom, s, e = input_locs[lidx]
 
         if cl not in atac_data:
@@ -643,13 +616,6 @@ def main(gpu, args):
         input_tensor = torch.cat((ref_data[chrom][s:e], tmp_atac), dim=1).unsqueeze(0)
         input_tensor = input_tensor[:, :, :, 300:1300]
 
-        if atac_merge:
-            atac = input_tensor[:, :, 4:5, :]
-            B, L, C_atac, W = atac.shape
-            atac_100bp = atac.view(B, L, C_atac, W // 10, 10).mean(dim=-1)
-            atac_smooth = atac_100bp.repeat_interleave(10, dim=-1)
-            input_tensor[:, :, 4:5, :] = atac_smooth
-
         B, L, C, W = input_tensor.shape
         input_tensor = input_tensor.permute(0, 2, 1, 3).contiguous()
         input_tensor = input_tensor.view(B, C, L * W).cuda(gpu, non_blocking=True)
@@ -658,11 +624,7 @@ def main(gpu, args):
         if cl not in rna_data[task]:
             raise KeyError(f"{cl} not found in rna_data[{task}].")
 
-        rna_label = (
-            rna_data[task][cl][rnaidx:rnaidx + 1, args.crop * 10:-args.crop * 10, :]
-            .float()
-            .cuda(gpu, non_blocking=True)
-        )
+        rna_label = (rna_data[task][cl][rnaidx:rnaidx + 1, args.crop * 10:-args.crop * 10, :].float().cuda(gpu, non_blocking=True))
 
         return input_tensor, rna_label
 
@@ -803,21 +765,13 @@ def main(gpu, args):
                     sample_w = sample_weights_for_task(task, used_cells, output.device)
                     weight_sum = sample_w.sum()
 
-                    # Channel-balanced absolute loss.
-                    abs_sum = channel_balanced_abs_loss_sum(
-                        output,
-                        batch_target,
-                        sample_weights=sample_w,
-                    )
+                    # Channel-balanced absolute loss
+                    abs_sum = channel_balanced_abs_loss_sum(output, batch_target, sample_weights=sample_w)
                     abs_contrib = task_w[task] * abs_sum / denom
 
-                    # Same-locus multi-cell delta loss.
+                    # Same-locus multi-cell delta loss
                     if args.lambda_delta > 0:
-                        delta_mean = channel_balanced_delta_loss_mean(
-                            output,
-                            batch_target,
-                            sample_weights=sample_w,
-                        )
+                        delta_mean = channel_balanced_delta_loss_mean(output, batch_target, sample_weights=sample_w)
                         delta_contrib = args.lambda_delta * task_w[task] * weight_sum * delta_mean / denom
                     else:
                         delta_contrib = torch.tensor(0.0, device=output.device)
