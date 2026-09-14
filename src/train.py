@@ -24,8 +24,6 @@ from model import build_model
 #   1. same-locus multi-cell batching
 #   2. channel-balanced absolute loss
 #   3. channel-balanced delta loss
-#   4. per-strand validation logging
-#   5. plateau-based LR schedule: 1e-4 -> 5e-5 -> 1e-5
 # ============================================================
 
 def parser_args():
@@ -49,11 +47,9 @@ def parser_args():
     parser.add_argument('--return_embed', default=False, action='store_true')
     parser.add_argument('--return_local', default=True, action='store_false')
 
-    # Checkpoint / output
     parser.add_argument('--init_ckpt', type=str, default='erna_1kb.pt', help='1 kb nascent RNA checkpoint used to initialize 100 bp fine-tuning.')
     parser.add_argument('--save_prefix', type=str, default='erna_100bp_same_locus_delta', help='Prefix for log and checkpoint files.')
 
-    # Same-locus delta loss
     parser.add_argument('--lambda_delta', type=float, default=0.2, help='Weight for same-locus multi-cell delta loss.')
     parser.add_argument('--lr_list', type=str, default='1e-4,5e-5,1e-5', help='Comma-separated learning rates used by plateau scheduler.')
     parser.add_argument('--lr_patience', default=3, type=int, help='Number of non-improving epochs before reducing LR.')
@@ -106,10 +102,6 @@ class PlateauLRScheduler:
         }
 
     def step(self, score):
-        """
-        Returns:
-            improved, lr_reduced, should_stop
-        """
         improved = score > (self.best + self.threshold)
         lr_reduced = False
         should_stop = False
@@ -137,7 +129,7 @@ class PlateauLRScheduler:
 
 
 def split_dataset(seed=24):
-    input_locs = np.load('/nfs/turbo/umms-drjieliu/usr/zzh/mutimodal_epcot/input_region_dup_250_noX.npy')
+    input_locs = np.load('input_region_dup_250_noX.npy')
     dataset_size = input_locs.shape[0]
     indices = np.arange(dataset_size)
     valid_split = int(np.floor(dataset_size * 0.8))
@@ -288,13 +280,7 @@ def apply_atac_depth_dropout(
 ):
     """
     x: (B, 5, L), ATAC is channel 4.
-    This is optional and disabled by default in experiment 2.
     """
-    # x = x.clone()
-
-    # if torch.rand(1, device=x.device).item() < p_scale:
-    #     scale = torch.empty(1, device=x.device).uniform_(*scale_range)
-    #     x[:, 4:5, :] *= scale
     if torch.rand(1, device=x.device).item() < p_scale:
         lo, hi = math.log(scale_range[0]), math.log(scale_range[1])
         scale = torch.exp(torch.empty(1, device=x.device).uniform_(lo, hi))
@@ -341,11 +327,6 @@ def per_sample_channel_balanced_smooth_l1(pred, target, scale_floor=0.15):
         channel_losses.append(loss_map.reshape(B, -1).mean(dim=1))
 
     return torch.stack(channel_losses, dim=1).mean(dim=1)
-    # per_channel = F.smooth_l1_loss(pred, target, reduction='none').mean(dim=1)   # (B, C)
-
-    # scale = target.detach().std(dim=1)                                            # (B, C)
-    # scale = torch.clamp(scale, min=scale_floor)
-    # return (per_channel / scale).mean(dim=1)
 
 
 def channel_balanced_abs_loss_sum(pred, target, sample_weights=None):
@@ -383,7 +364,6 @@ def channel_balanced_delta_loss_mean(pred, target, sample_weights=None):
     pred_delta = pred[i] - pred[j]
     true_delta = target[i] - target[j]
 
-    # per_pair = F.smooth_l1_loss(pred_delta, true_delta, reduction='none').flatten(1).mean(1)
     per_pair = per_sample_channel_balanced_smooth_l1(pred_delta, true_delta)
 
     if sample_weights is not None:
@@ -392,11 +372,6 @@ def channel_balanced_delta_loss_mean(pred, target, sample_weights=None):
         return (per_pair * pair_w).sum() / (pair_w.sum() + 1e-8)
 
     return per_pair.mean()
-
-
-# ============================================================
-# Streaming Pearson for exact distributed validation
-# ============================================================
 
 class RunningPearson:
     def __init__(self):
@@ -506,11 +481,6 @@ def final_train_score(scores, train_cell_dict):
         return -np.inf
     return float(np.sum(vals))
 
-
-# ============================================================
-# Main
-# ============================================================
-
 def main(gpu, args):
     torch.cuda.set_device(gpu)
     rank = gpu
@@ -587,15 +557,15 @@ def main(gpu, args):
         print('load data start', flush=True)
 
     # Load ATAC data.
-    with open('/nfs/turbo/umms-drjieliu/usr/zzh/mutimodal_epcot/atac_bw/train_atac_merge_fp16.pickle', 'rb') as f:
+    with open('train_atac_merge_fp16.pickle', 'rb') as f:
         atac_data = pickle.load(f)
-    with open('/nfs/turbo/umms-drjieliu/usr/lhjiang/proj_data/atac-seq/train_HeLa_dnase.pickle', 'rb') as f:
+    with open('train_HeLa_dnase.pickle', 'rb') as f:
         atac_data['HeLa'] = pickle.load(f)
-    with open('/nfs/turbo/umms-drjieliu/usr/lhjiang/proj_data/atac-seq/train_Jurkat_dnase.pickle', 'rb') as f:
+    with open('train_Jurkat_dnase.pickle', 'rb') as f:
         atac_data['Jurkat'] = pickle.load(f)
-    with open('/scratch/drjieliu_root/drjieliu/lhjiang/proj_data/atac-seq/MCF10A_atac.pickle','rb') as f:
+    with open('MCF10A_atac.pickle','rb') as f:
         atac_data['MCF10A'] = pickle.load(f)
-    with open('/scratch/drjieliu_root/drjieliu/lhjiang/proj_data/atac-seq/encode/IMR-90_atac.pickle','rb') as f:
+    with open('IMR-90_atac.pickle','rb') as f:
         atac_data['IMR-90'] = pickle.load(f)
 
     atac_data['MCF10A'] = {
@@ -625,7 +595,7 @@ def main(gpu, args):
         for cl in cell_dict[task]:
             rna_data[task][cl] = load_erna(task, cl, required=True)
 
-    # Load held-out labels if available.
+    # Load held-out labels
     heldout_cell_dict = {'tt': [], 'bru': []}
     for task, cells in heldout_cell_dict_requested.items():
         for cl in cells:
@@ -636,7 +606,6 @@ def main(gpu, args):
                 rna_data[task][cl] = arr
                 heldout_cell_dict[task].append(cl)
 
-    # Held-out validation also requires ATAC.
     for task in list(heldout_cell_dict.keys()):
         kept = []
         for cl in heldout_cell_dict[task]:
@@ -645,8 +614,7 @@ def main(gpu, args):
             else:
                 if rank == 0:
                     print(
-                        f"Warning: skipping held-out validation for {task} {cl} "
-                        f"because ATAC is not present in atac_data.",
+                        f"Warning: skipping held-out validation for {task} {cl} because ATAC is not present in atac_data.",
                         flush=True,
                     )
         heldout_cell_dict[task] = kept
@@ -771,7 +739,6 @@ def main(gpu, args):
                     for task, cells in valid_cell_dict.items():
                         head_i = task_to_head[task]
                         for cl in cells:
-                            # Skip if ATAC missing.
                             if cl not in atac_data:
                                 continue
 
@@ -786,7 +753,7 @@ def main(gpu, args):
 
         return rp_to_state_dict(rp)
 
-    # Training loop.
+    # Training
     best_score = -np.inf
     optimizer.zero_grad(set_to_none=True)
 
@@ -898,7 +865,7 @@ def main(gpu, args):
         if rank == 0:
             print("Finished epoch", epoch, flush=True)
 
-        # Validation.
+        # Validation
         run_validation = ((epoch + 1) % args.validate_every == 0) or (epoch == args.epochs - 1)
         if run_validation:
             local_state = model_valid_streaming(model)
@@ -970,7 +937,7 @@ def main(gpu, args):
         else:
             control = [None, None]
 
-        # Broadcast LR and stop decision to all ranks.
+        # Broadcast LR and stop decision to all ranks
         dist.broadcast_object_list(control, src=0)
         new_lr, should_stop_global = control
 
