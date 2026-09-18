@@ -2,7 +2,7 @@
 
 GIANT is a deep learning model for predicting cell type-specific nascent RNA transcription profiles from genomic sequence and chromatin accessibility.
 
-This repository currently provides the core model implementation and training code used for SAINT. Additional documentation, preprocessing workflows, inference code, and pretrained model weights will be added in future updates.
+This repository currently provides the core model implementation and training code used for GIANT. Additional documentation, preprocessing workflows, inference code, and pretrained model weights will be added in future updates.
 
 ## Installation
 
