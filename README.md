@@ -1,12 +1,12 @@
-# SAINT - Sequence and Accessibility to Infer Nascent RNA Transcription
+# GIANT - Genomic sequence Integrated with chromatin Accessibility or inferring Nascent Transcription
 
-SAINT is a deep learning model for predicting cell type-specific nascent RNA transcription profiles from genomic sequence and chromatin accessibility.
+GIANT is a deep learning model for predicting cell type-specific nascent RNA transcription profiles from genomic sequence and chromatin accessibility.
 
 This repository currently provides the core model implementation and training code used for SAINT. Additional documentation, preprocessing workflows, inference code, and pretrained model weights will be added in future updates.
 
 ## Installation
 
-SAINT was developed and tested with:
+GIANT was developed and tested with:
 
 * Python 3.9.7
 * PyTorch 2.5.0
@@ -15,8 +15,8 @@ SAINT was developed and tested with:
 Clone the repository and install the required Python packages:
 
 ```bash
-git clone https://github.com/linghuajiang/SAINT.git
-cd SAINT
+git clone https://github.com/linghuajiang/GIANT.git
+cd GIANT
 
 pip install -r requirements.txt
 ```
@@ -41,7 +41,7 @@ Users should update the data paths and other environment-specific settings in th
 
 ## Pretrained model weights
 
-Pretrained SAINT model weights can be downloaded from https://zenodo.org/records/22659557
+Pretrained model weights can be downloaded from https://zenodo.org/records/22659557
 
 ## Citation
 
